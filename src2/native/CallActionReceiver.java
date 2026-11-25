@@ -11,7 +11,10 @@ public class CallActionReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         NotificationManagerCompat.from(context).cancel(RPNativePlugin.NOTIF_INCOMING);
-        if (RPNativePlugin.instance != null) RPNativePlugin.instance.dispatchAction("decline");
-        else RPNativePlugin.pendingAction = "decline";
+        String callId = intent.getStringExtra("callId");
+        boolean appAwake = RPNativePlugin.instance != null && System.currentTimeMillis() - CallService.lastJsBeat < CallService.JS_STALE_MS;
+        if (appAwake) RPNativePlugin.instance.dispatchAction("decline");
+        // Tell the caller directly too, in case the app screen is asleep and never saw the call.
+        if (callId != null && !callId.isEmpty()) CallService.declineCall(context, callId);
     }
 }
