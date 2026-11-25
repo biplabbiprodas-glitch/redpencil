@@ -1,5 +1,5 @@
 // Redpencil Phone — desktop app (Mac & Windows). Wraps the same app the phones use.
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, session, shell, systemPreferences, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, protocol, net, session, shell, systemPreferences, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -118,6 +118,12 @@ app.whenReady().then(async () => {
   });
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(['media', 'notifications', 'clipboard-sanitized-write'].includes(perm)));
   session.defaultSession.setPermissionCheckHandler((_wc, perm) => ['media', 'notifications'].includes(perm));
+  // Screen sharing in meetings: macOS 15+ shows its own picker; elsewhere the whole main screen is shared.
+  session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then((sources) => { if (sources.length) callback({ video: sources[0] }); else callback({}); })
+      .catch(() => callback({}));
+  }, { useSystemPicker: true });
   if (process.platform === 'darwin') {
     try { await systemPreferences.askForMediaAccess('microphone'); await systemPreferences.askForMediaAccess('camera'); } catch (e) {}
   }
