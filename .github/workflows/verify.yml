@@ -1,0 +1,35 @@
+name: Verify signed APK with official Android tools
+on:
+  push:
+    paths: ['.github/workflows/verify.yml']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild signed 1.0.4 and run apksigner
+        env:
+          V2: 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
+          PADLEN: '1743'
+        run: |
+          curl -sSL -o u.apk https://github.com/biplabbiprodas-glitch/redpencil/releases/download/v1.0.4/RedpencilPhone-unsigned.apk
+          python3 - <<'PY'
+          import struct, base64, os, hashlib
+          v2 = base64.b64decode(os.environ['V2']); pad = int(os.environ['PADLEN'])
+          body = struct.pack('<Q', 4 + len(v2)) + struct.pack('<I', 0x7109871a) + v2 + struct.pack('<Q', 4 + pad) + struct.pack('<I', 0x42726577) + bytes(pad)
+          sz = len(body) + 24
+          blk = struct.pack('<Q', sz) + body + struct.pack('<Q', sz) + b'APK Sig Block 42'
+          u = open('u.apk', 'rb').read()
+          e = u.rfind(b'PK\x05\x06'); cd_size, cd_off = struct.unpack('<II', u[e+12:e+20])
+          s = u[:cd_off] + blk + u[cd_off:e+16] + struct.pack('<I', cd_off + len(blk)) + u[e+20:]
+          open('signed.apk', 'wb').write(s)
+          print('unsigned', hashlib.sha256(u).hexdigest()); print('signed', hashlib.sha256(s).hexdigest())
+          PY
+          BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+          echo "build-tools: $BT"
+          echo '## apksigner verify' >> $GITHUB_STEP_SUMMARY
+          $BT/apksigner verify --verbose --print-certs signed.apk 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '## zipalign check' >> $GITHUB_STEP_SUMMARY
+          ($BT/zipalign -c -v -p 4 signed.apk 2>&1 | tail -3 | tee -a $GITHUB_STEP_SUMMARY) || true
+          echo '## badging' >> $GITHUB_STEP_SUMMARY
+          $BT/aapt2 dump badging signed.apk 2>&1 | head -4 | tee -a $GITHUB_STEP_SUMMARY
