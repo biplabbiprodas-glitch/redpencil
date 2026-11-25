@@ -16,7 +16,7 @@ jobs:
           mkdir app && tar -xJf src.tar.xz -C app && ls -R app | head -40
       - name: Make icons
         working-directory: app
-        run: pip install pillow && python3 make_icons.py && ls www/icons assets
+        run: pip install pillow && python3 make_icons.py && python3 ../make_logo_icons.py && ls www/icons assets
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -44,7 +44,7 @@ jobs:
       - name: App icon
         continue-on-error: true
         working-directory: app
-        run: npx capacitor-assets generate --android --iconBackgroundColor '#C8102E' --splashBackgroundColor '#FBF7F4'
+        run: npx capacitor-assets generate --android --iconBackgroundColor '#FFFFFF' --splashBackgroundColor '#FBF7F4'
       - name: Build APK
         working-directory: app
         run: |
