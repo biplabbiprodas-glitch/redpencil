@@ -131,7 +131,10 @@ public class CallService extends Service {
         while (running) {
             long wait = 8000;
             try {
-                boolean jsAlive = System.currentTimeMillis() - lastJsBeat < JS_STALE_MS;
+                // The app screen only counts as listening while it is actually on screen.
+                // As soon as it goes to the background or the screen turns off, this service takes over.
+                boolean jsAlive = RPNativePlugin.foreground && RPNativePlugin.instance != null
+                    && System.currentTimeMillis() - lastJsBeat < JS_STALE_MS;
                 if (signedIn(this) && !inCallNow) {
                     if (ringingId != null) {
                         checkRinging();
@@ -140,7 +143,7 @@ public class CallService extends Service {
                         if (System.currentTimeMillis() - lastBeat > 60_000) { heartbeat(); lastBeat = System.currentTimeMillis(); }
                         pollCalls();
                         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                        wait = pm.isInteractive() ? 5000 : 8000;
+                        wait = pm.isInteractive() ? 6000 : 10000;
                     }
                 }
             } catch (Exception ignored) {
@@ -183,8 +186,8 @@ public class CallService extends Service {
     private void checkRinging() throws Exception {
         String id = ringingId;
         if (id == null) return;
-        // the app screen woke up and took over the call
-        if (System.currentTimeMillis() - lastJsBeat < 8000) { ringingId = null; return; }
+        // the app screen is open again and has taken over the call
+        if (RPNativePlugin.foreground && System.currentTimeMillis() - lastJsBeat < 8000) { ringingId = null; return; }
         JSONObject doc = new JSONObject(Fs.http(this, "GET", Fs.docsBase(this) + "/calls/" + id, null));
         String status = str(doc.getJSONObject("fields"), "status", "");
         if (!"ringing".equals(status)) {
@@ -197,10 +200,16 @@ public class CallService extends Service {
     private void heartbeat() throws Exception {
         String uid = prefs(this).getString("uid", "");
         JSONObject w = new JSONObject();
+        String ver = "?";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) {}
         w.put("update", new JSONObject().put("name", Fs.docName(this, "users/" + uid))
-            .put("fields", new JSONObject().put("online", new JSONObject().put("booleanValue", true))));
-        w.put("updateMask", new JSONObject().put("fieldPaths", new JSONArray().put("online")));
-        w.put("updateTransforms", new JSONArray().put(new JSONObject().put("fieldPath", "lastSeen").put("setToServerValue", "REQUEST_TIME")));
+            .put("fields", new JSONObject()
+                .put("online", new JSONObject().put("booleanValue", true))
+                .put("appVersion", new JSONObject().put("stringValue", "Android " + ver))));
+        w.put("updateMask", new JSONObject().put("fieldPaths", new JSONArray().put("online").put("appVersion")));
+        w.put("updateTransforms", new JSONArray()
+            .put(new JSONObject().put("fieldPath", "lastSeen").put("setToServerValue", "REQUEST_TIME"))
+            .put(new JSONObject().put("fieldPath", "backgroundSeen").put("setToServerValue", "REQUEST_TIME")));
         w.put("currentDocument", new JSONObject().put("exists", true));
         Fs.http(this, "POST", Fs.docsBase(this) + ":commit", new JSONObject().put("writes", new JSONArray().put(w)).toString());
     }
