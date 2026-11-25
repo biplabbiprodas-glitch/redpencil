@@ -123,6 +123,7 @@ public class RPNativePlugin extends Plugin {
     @PluginMethod
     public void callActive(PluginCall call) {
         boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        CallService.inCallNow = on;
         try { CallService.start(getContext(), on); } catch (Exception ignored) {}
         if (!on && getActivity() instanceof MainActivity) {
             final MainActivity m = (MainActivity) getActivity();
@@ -180,17 +181,21 @@ public class RPNativePlugin extends Plugin {
         call.resolve();
     }
 
-    @PluginMethod
-    public void showIncoming(PluginCall call) {
-        PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
-        boolean screenOn = pm.isInteractive();
-        if (foreground && screenOn) { JSObject r = new JSObject(); r.put("native", false); call.resolve(r); return; }
-        String name = call.getString("name", "Colleague");
-        String sub = call.getString("sub", "Redpencil Phone");
-        Intent decl = new Intent(getContext(), CallActionReceiver.class);
+    private static PendingIntent openIntent(Context ctx, String action, int req) {
+        Intent i = new Intent(ctx, MainActivity.class);
+        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        if (action != null) i.putExtra("rp_action", action);
+        return PendingIntent.getActivity(ctx, req, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** Ring with a full-screen incoming-call screen (works with the phone locked and the app asleep). */
+    public static boolean postIncoming(Context ctx, String name, String sub, String callId) {
+        createChannels(ctx);
+        Intent decl = new Intent(ctx, CallActionReceiver.class);
         decl.setAction("com.redpencil.phone.DECLINE");
-        PendingIntent declPi = PendingIntent.getBroadcast(getContext(), 11, decl, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        NotificationCompat.Builder b = new NotificationCompat.Builder(getContext(), CH_CALLS)
+        decl.putExtra("callId", callId == null ? "" : callId);
+        PendingIntent declPi = PendingIntent.getBroadcast(ctx, 11, decl, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle("Incoming call — " + name)
             .setContentText(sub)
@@ -202,18 +207,68 @@ public class RPNativePlugin extends Plugin {
             .setTimeoutAfter(50000)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
             .setVibrate(new long[]{0, 700, 400, 700})
-            .setContentIntent(activityIntent("incoming", 12))
-            .setFullScreenIntent(activityIntent("incoming", 13), true)
+            .setContentIntent(openIntent(ctx, "incoming", 12))
+            .setFullScreenIntent(openIntent(ctx, "incoming", 13), true)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declPi)
-            .addAction(android.R.drawable.sym_action_call, "Answer", activityIntent("answer", 14));
+            .addAction(android.R.drawable.sym_action_call, "Answer", openIntent(ctx, "answer", 14));
         android.app.Notification n = b.build();
         n.flags |= android.app.Notification.FLAG_INSISTENT;
         try {
-            NotificationManagerCompat.from(getContext()).notify(NOTIF_INCOMING, n);
+            NotificationManagerCompat.from(ctx).notify(NOTIF_INCOMING, n);
+            return true;
         } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    public static void postMissed(Context ctx, String name) {
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CH_MSGS)
+            .setSmallIcon(android.R.drawable.stat_notify_missed_call)
+            .setContentTitle("Missed call")
+            .setContentText(name)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent(ctx, null, 15));
+        try { NotificationManagerCompat.from(ctx).notify(2002, b.build()); } catch (SecurityException ignored) {}
+    }
+
+    @PluginMethod
+    public void showIncoming(PluginCall call) {
+        CallService.lastJsBeat = System.currentTimeMillis();
+        PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        boolean screenOn = pm.isInteractive();
+        if (foreground && screenOn) {
+            // the app is on screen and rings itself
+            NotificationManagerCompat.from(getContext()).cancel(NOTIF_INCOMING);
             JSObject r = new JSObject(); r.put("native", false); call.resolve(r); return;
         }
-        JSObject r = new JSObject(); r.put("native", true); call.resolve(r);
+        boolean ok = postIncoming(getContext(), call.getString("name", "Colleague"), call.getString("sub", "Redpencil Phone"), call.getString("callId", ""));
+        JSObject r = new JSObject(); r.put("native", ok); call.resolve(r);
+    }
+
+    /** The app hands its sign-in to the background service so it can keep watching for calls. */
+    @PluginMethod
+    public void setAuth(PluginCall call) {
+        android.content.SharedPreferences.Editor e = Fs.prefs(getContext()).edit();
+        String uid = call.getString("uid", "");
+        if (uid == null || uid.isEmpty()) {
+            e.clear().apply();
+            Fs.forgetToken();
+        } else {
+            e.putString("uid", uid)
+             .putString("refresh", call.getString("refresh", ""))
+             .putString("apiKey", call.getString("apiKey", ""))
+             .putString("project", call.getString("project", ""))
+             .apply();
+            Fs.forgetToken();
+        }
+        call.resolve();
+    }
+
+    /** Heartbeat from the app screen: while these arrive, the app listens for calls itself. */
+    @PluginMethod
+    public void beat(PluginCall call) {
+        CallService.lastJsBeat = System.currentTimeMillis();
+        call.resolve();
     }
 
     @PluginMethod
