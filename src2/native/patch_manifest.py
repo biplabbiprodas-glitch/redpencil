@@ -10,6 +10,7 @@ perms = [
     'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
     'android.permission.FOREGROUND_SERVICE_MICROPHONE', 'android.permission.USE_FULL_SCREEN_INTENT',
     'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS', 'android.permission.ACCESS_NETWORK_STATE',
+    'android.permission.RECEIVE_BOOT_COMPLETED',
 ]
 lines = ''.join('    <uses-permission android:name="%s" />\n' % p for p in perms if p not in m)
 lines += '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n'
@@ -28,11 +29,18 @@ components = '''
                 android:value="Keeps an office VoIP phone connected so incoming calls can ring" />
         </service>
         <receiver android:name=".CallActionReceiver" android:exported="false" />
+        <receiver android:name=".BootReceiver" android:exported="true" android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>'''
 assert '</application>' in m
 m = m.replace('</application>', components, 1)
 
 open(path, 'w', encoding='utf-8').write(m)
-for p in ['RECORD_AUDIO', 'FOREGROUND_SERVICE_SPECIAL_USE', 'USE_FULL_SCREEN_INTENT', '.CallService', '.CallActionReceiver']:
+for p in ['RECEIVE_BOOT_COMPLETED', '.BootReceiver', 'RECORD_AUDIO', 'FOREGROUND_SERVICE_SPECIAL_USE', 'USE_FULL_SCREEN_INTENT', '.CallService', '.CallActionReceiver']:
     assert p in m, p
 print('manifest patched')
