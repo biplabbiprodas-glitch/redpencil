@@ -313,7 +313,7 @@ function renderMsgs(scroll) {
       : m.file
       ? '<div class="file" data-fid="' + esc(m.file.id) + '" data-fname="' + esc(m.file.name) + '" data-fmime="' + esc(m.file.mime || '') + '"><div class="fi"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div><div><b>' + esc(m.file.name) + '</b><span>' + fmtSize(m.file.size || 0) + ' · tap to open</span></div></div>' + (m.text ? '<div style="margin-top:6px">' + esc(m.text) + '</div>' : '')
       : esc(m.text);
-    html += '<div class="bub' + (me ? ' me' : '') + '">' + who + body + tm + '</div>';
+    html += '<div class="bub' + (me ? ' me' : '') + '"' + (me ? ' data-own="' + esc(m.id) + '"' : '') + '>' + who + body + tm + '</div>';
   });
   Object.keys(CH.pending).forEach(function (k) {
     var p = CH.pending[k]; if (p.chat !== CH.open) return;
@@ -437,6 +437,14 @@ function b64ToArr(b64) { var bin = atob(b64), arr = new Uint8Array(bin.length); 
     '#vrec .vbar{display:flex;align-items:center;justify-content:space-around;padding:16px 10px calc(16px + var(--safe-b));background:#111}',
     '#vrec .vbar button{color:#fff;font-weight:600;padding:10px 14px;border-radius:22px;background:#ffffff26;min-width:90px}',
     '#vrec .vbar button.go{background:var(--green)}',
+    '#vrec .vbar button.del{background:#C8102E}',
+    '#delSheet{position:fixed;inset:0;z-index:70;background:#0006;display:flex;align-items:flex-end;justify-content:center}',
+    '#delSheet .ds{background:var(--card);width:100%;max-width:460px;border-radius:18px 18px 0 0;padding:18px 18px calc(18px + var(--safe-b));display:flex;flex-direction:column;gap:6px}',
+    '#delSheet .ds span{color:var(--ink-3);font-size:13.5px}',
+    '#delSheet .dsb{display:flex;gap:10px;margin-top:12px}',
+    '#delSheet .dsb button{flex:1;padding:12px;border-radius:12px;font-weight:600;border:1px solid var(--line)}',
+    '#delSheet #dsYes{background:var(--red);color:#fff;border-color:var(--red)}',
+    '.bub[data-own]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}',
     '#vrec .vrbtn{width:66px;height:66px;min-width:0!important;border-radius:50%!important;background:#fff!important;display:grid;place-items:center;padding:0!important}',
     '#vrec .vrbtn i{display:block;width:28px;height:28px;border-radius:50%;background:var(--red);transition:all .2s}',
     '#vrec .vrbtn.on i{border-radius:6px;width:22px;height:22px}',
@@ -520,10 +528,11 @@ function startVideoMsg() {
     var ov = document.createElement('div'); ov.id = 'vrec';
     ov.innerHTML = '<div class="vtime" id="vrTime">Tap the red button to record (up to 1 minute)</div>' +
       '<video id="vrView" autoplay muted playsinline></video>' +
-      '<div class="vbar"><button id="vrCancel">Cancel</button><button class="vrbtn" id="vrBtn" aria-label="Record"><i></i></button><button id="vrSend" class="go" style="visibility:hidden">Send</button></div>';
+      '<div class="vbar"><button id="vrCancel">Cancel</button><button class="vrbtn" id="vrBtn" aria-label="Record"><i></i></button><button id="vrRetake" style="display:none">↻ Retake</button><button id="vrSend" class="go" style="visibility:hidden">Send</button></div>';
     document.body.appendChild(ov);
     var v = $('#vrView'); v.srcObject = st; v.style.transform = 'scaleX(-1)'; v.play().catch(function () {});
     $('#vrCancel').onclick = closeVideoMsg;
+    $('#vrRetake').onclick = function () { closeVideoMsg(); setTimeout(startVideoMsg, 200); };
     $('#vrBtn').onclick = function () { if (r.mr && r.mr.state === 'recording') stopVideoRec(r); else if (!r.mr) startVideoRec(r); };
     $('#vrSend').onclick = function () {
       if (!r.blob) return;
@@ -545,8 +554,9 @@ function startVideoRec(r) {
     var v = $('#vrView'); if (!v) return;
     v.srcObject = null; v.style.transform = 'none'; v.muted = false; v.loop = true; v.controls = true;
     v.src = r.url = URL.createObjectURL(r.blob); fixDuration(v, true);
-    $('#vrBtn').style.visibility = 'hidden'; $('#vrSend').style.visibility = 'visible';
-    $('#vrTime').textContent = 'Preview · ' + fmtSec(r.dur) + ' — tap Send';
+    $('#vrBtn').style.display = 'none'; $('#vrRetake').style.display = ''; $('#vrSend').style.visibility = 'visible';
+    $('#vrCancel').textContent = '🗑 Delete'; $('#vrCancel').classList.add('del');
+    $('#vrTime').textContent = 'Preview · ' + fmtSec(r.dur) + ' — Send, Retake or Delete';
   };
   r.t0 = Date.now(); mr.start(1000); $('#vrBtn').classList.add('on');
   r.timer = setInterval(function () { var s = (Date.now() - r.t0) / 1000; $('#vrTime').textContent = '● Recording ' + fmtSec(s) + ' / 1:00'; if (s >= VIDEO_MAX) stopVideoRec(r); }, 250);
@@ -609,6 +619,55 @@ function loadMedia(id, kind, mime) {
     MEDIA[id] = wrap; delete MEDIA_LOADING[id];
     var ph = document.querySelector('.media[data-mid="' + id + '"]'); if (ph) { ph.innerHTML = ''; ph.appendChild(wrap); }
   }).catch(function (e) { delete MEDIA_LOADING[id]; renderMsgs(false); toast('Could not play: ' + e.message, 4500); });
+}
+
+/* ================= delete your own messages (press and hold, or right-click) ================= */
+var LP = { timer: null, x: 0, y: 0, at: 0 };
+(function () {
+  var box = $('#msgs');
+  function own(e) { return e.target.closest && e.target.closest('.bub[data-own]'); }
+  function stop() { clearTimeout(LP.timer); LP.timer = null; }
+  box.addEventListener('pointerdown', function (e) {
+    var b = own(e); if (!b || e.button > 0) return;
+    LP.x = e.clientX; LP.y = e.clientY; stop();
+    var id = b.dataset.own;
+    LP.timer = setTimeout(function () { LP.timer = null; LP.at = Date.now(); if (navigator.vibrate) navigator.vibrate(30); askDelete(id); }, 550);
+  });
+  box.addEventListener('pointermove', function (e) { if (LP.timer && (Math.abs(e.clientX - LP.x) > 10 || Math.abs(e.clientY - LP.y) > 10)) stop(); });
+  box.addEventListener('pointerup', stop); box.addEventListener('pointercancel', stop); box.addEventListener('scroll', stop);
+  box.addEventListener('contextmenu', function (e) { var b = own(e); if (!b) return; e.preventDefault(); stop(); askDelete(b.dataset.own); });
+  // a press-and-hold shouldn't also open the file or start playing
+  box.addEventListener('click', function (e) { if (Date.now() - LP.at < 900 && own(e)) { e.stopPropagation(); e.preventDefault(); } }, true);
+})();
+function askDelete(id) {
+  if ($('#delSheet')) return;
+  var m = CH.docs.find(function (x) { return x.id === id; });
+  if (!m || m.from !== S.uid || !CH.open) return;
+  var what = m.file ? (m.file.kind === 'voice' ? 'voice message' : m.file.kind === 'video' ? 'video message' : 'file') : 'message';
+  var chatId = CH.open;
+  var ov = document.createElement('div'); ov.id = 'delSheet';
+  ov.innerHTML = '<div class="ds"><b>Delete this ' + what + '?</b><span>It will be removed for everyone in this chat.</span>' +
+    '<div class="dsb"><button id="dsNo">Cancel</button><button id="dsYes">Delete</button></div></div>';
+  document.body.appendChild(ov);
+  ov.onclick = function (e) { if (e.target === ov) ov.remove(); };
+  $('#dsNo').onclick = function () { ov.remove(); };
+  $('#dsYes').onclick = function () { ov.remove(); deleteMessage(chatId, m); };
+}
+function deleteMessage(chatId, m) {
+  var ref = db.collection('chats').doc(chatId);
+  if (m.file && MEDIA[m.file.id]) { var el = MEDIA[m.file.id].firstChild; if (el && el.pause) el.pause(); delete MEDIA[m.file.id]; }
+  ref.collection('messages').doc(m.id).delete().then(function () {
+    var c = CH.chats.get(chatId);
+    if (c && c.lastFrom === S.uid && (c.lastT || 0) <= (m.t || 0)) ref.update({ lastText: '🚫 Message deleted' }).catch(function () {});
+    if (m.file && m.file.id) {
+      var fr = db.collection('files').doc(m.file.id);
+      fr.collection('chunks').get()
+        .then(function (snap) { return Promise.all(snap.docs.map(function (d) { return d.ref.delete(); })); })
+        .then(function () { return fr.delete(); })
+        .catch(function () {});
+    }
+    toast('Deleted');
+  }).catch(function (e) { toast('Could not delete: ' + e.message, 4500); });
 }
 
 /* ================= group calls (everyone connects to everyone, audio) ================= */
