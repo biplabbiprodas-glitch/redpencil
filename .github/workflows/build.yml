@@ -16,7 +16,7 @@ jobs:
           mkdir app && tar -xJf src.tar.xz -C app && ls -R app | head -40
       - name: Make icons
         working-directory: app
-        run: pip install pillow && python3 make_icons.py && python3 ../make_logo_icons.py && cp ../app-config.js www/config.js && cat www/config.js && ls www/icons assets
+        run: pip install pillow && python3 make_icons.py && python3 ../make_logo_icons.py && cp ../app-config.js www/config.js && cp ../ringtone.js www/ringtone.js && sed -i 's|</body>|<script src="ringtone.js"></script></body>|' www/index.html && grep -c ringtone.js www/index.html && cat www/config.js && ls www/icons assets
       - uses: actions/setup-node@v4
         with:
           node-version: 20
