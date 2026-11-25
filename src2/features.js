@@ -27,15 +27,20 @@ window.startApp = function () {
 };
 
 // Ring on the lock screen / in background, and stop it when the call is handled.
-function nativeRing(name, sub) {
-  nat('showIncoming', { name: name, sub: sub }).then(function (r) { if (r && r.native) stopTone(); });
+function nativeRing(name, sub, callId) {
+  nat('showIncoming', { name: name, sub: sub, callId: callId || '' }).then(function (r) { if (r && r.native) stopTone(); });
 }
 var _incomingInternal = window.incomingInternal;
 window.incomingInternal = function (id, d) {
   _incomingInternal(id, d);
   // Tell the caller the call really reached this device, so their screen shows "Ringing…".
   try { db.collection('calls').doc(id).update({ delivered: TS() }).catch(function () {}); } catch (e) {}
-  nativeRing(d.callerName, (d.video ? 'Video call' : 'Voice call') + ' · Ext ' + d.callerExt);
+  nativeRing(d.callerName, (d.video ? 'Video call' : 'Voice call') + ' · Ext ' + d.callerExt, id);
+  // "Answer" was tapped on the lock-screen notification before the app had woken up
+  if (window.__wantAnswer && Date.now() - window.__wantAnswer < 40000) {
+    window.__wantAnswer = 0;
+    setTimeout(function () { if (S.call && S.call.status === 'incoming') $('#cAccept').click(); }, 400);
+  }
 };
 // Caller side: show "Ringing…" only once the other device confirms it is ringing,
 // instead of guessing from the online dot. Say "may be offline" only after 12 s without a reply.
@@ -81,7 +86,7 @@ window.endLocal = function (c, msg, result) { var had = c && !c.ended; _endLocal
 
 function onCallAction(action) {
   if (!action) return;
-  if (action === 'answer') { if (S.call && S.call.status === 'incoming') $('#cAccept').click(); }
+  if (action === 'answer') { if (S.call && S.call.status === 'incoming') $('#cAccept').click(); else window.__wantAnswer = Date.now(); }
   else if (action === 'decline') { if (S.call && S.call.status === 'incoming') $('#cDecline').click(); }
   else if (action.indexOf('chat:') === 0) { var id = action.slice(5); if (id && CH.chats.has(id)) openChat(id); }
 }
@@ -91,13 +96,27 @@ function initFeatures() {
   listenInvites();
   if (RPN) {
     nat('start').then(refreshBg);
+    handOverToService();
+    nat('beat');
+    setInterval(function () { nat('beat'); }, 30000);
+    $$('[data-logout]').forEach(function (b) { b.addEventListener('click', function () { nat('setAuth', { uid: '' }); }, true); });
     try {
       RPN.addListener('callAction', function (a) { onCallAction(a && a.action); });
-      RPN.addListener('appState', function (s) { if (s && s.state === 'foreground') { beatNow(); refreshBg(); } });
+      RPN.addListener('appState', function (s) { if (s && s.state === 'foreground') { beatNow(); nat('beat'); refreshBg(); } });
     } catch (e) {}
     $('#bgCard').classList.remove('hidden');
   }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) beatNow(); });
+}
+
+// Give the Android background service this sign-in, so it can keep the phone online and ring
+// even when the app screen is asleep, swiped away, or not reopened after an update or restart.
+function handOverToService() {
+  try {
+    var u = firebase.auth().currentUser, cfg = firebase.app().options || {};
+    if (!u || !u.refreshToken) return;
+    nat('setAuth', { uid: u.uid, refresh: u.refreshToken, apiKey: cfg.apiKey || '', project: cfg.projectId || '' });
+  } catch (e) {}
 }
 
 /* ================= "Stay online & ringing" settings ================= */
