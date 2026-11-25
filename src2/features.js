@@ -289,7 +289,9 @@ function renderMsgs(scroll) {
     var me = m.from === S.uid;
     var who = (c.group && !me) ? '<div class="who">' + esc(m.name || nameOf(m.from)) + '</div>' : '';
     var tm = '<div class="tm">' + esc(new Date(m.t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) + '</div>';
-    var body = m.file
+    var body = (m.file && (m.file.kind === 'voice' || m.file.kind === 'video'))
+      ? '<div class="media" data-mid="' + esc(m.file.id) + '" data-kind="' + m.file.kind + '" data-mime="' + esc(m.file.mime || '') + '" data-dur="' + (m.file.dur || 0) + '"></div>'
+      : m.file
       ? '<div class="file" data-fid="' + esc(m.file.id) + '" data-fname="' + esc(m.file.name) + '" data-fmime="' + esc(m.file.mime || '') + '"><div class="fi"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div><div><b>' + esc(m.file.name) + '</b><span>' + fmtSize(m.file.size || 0) + ' · tap to open</span></div></div>' + (m.text ? '<div style="margin-top:6px">' + esc(m.text) + '</div>' : '')
       : esc(m.text);
     html += '<div class="bub' + (me ? ' me' : '') + '">' + who + body + tm + '</div>';
@@ -299,6 +301,7 @@ function renderMsgs(scroll) {
     html += '<div class="bub me"><div class="file"><div class="fi"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div><div><b>' + esc(p.name) + '</b><span>Sending… ' + p.pct + '%</span></div></div><div class="progress"><i style="width:' + p.pct + '%"></i></div></div>';
   });
   box.innerHTML = html || '<div class="empty">No messages yet. Say hello 👋</div>';
+  hydrateMedia(box);
   if (scroll || nearBottom) box.scrollTop = box.scrollHeight;
 }
 
@@ -324,10 +327,11 @@ function abToB64(buf) {
   for (var i = 0; i < bytes.length; i += step) s += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
   return btoa(s);
 }
-function sendFile(f) {
-  var chatId = CH.open, c = CH.chats.get(chatId); if (!c) return;
+function sendFile(f, meta, toChat) {
+  meta = meta || {};
+  var chatId = toChat || CH.open, c = CH.chats.get(chatId); if (!c) return;
   if (f.size > MAX_FILE) return toast('Files up to 15 MB can be sent (this one is ' + fmtSize(f.size) + ')', 4500);
-  var key = 'p' + Date.now(); CH.pending[key] = { chat: chatId, name: f.name, pct: 0 }; renderMsgs(true);
+  var key = 'p' + Date.now(); CH.pending[key] = { chat: chatId, name: meta.kind ? mediaLabel(meta.kind) : f.name, pct: 0 }; renderMsgs(true);
   var fref = db.collection('files').doc(), n = Math.max(1, Math.ceil(f.size / CHUNK));
   var mime = f.type || 'application/octet-stream';
   fref.set({ name: f.name, size: f.size, mime: mime, chunks: n, owner: S.uid, members: c.members, chatId: chatId, t: Date.now(), done: false })
@@ -345,8 +349,8 @@ function sendFile(f) {
     .then(function () { return fref.update({ done: true }); })
     .then(function () {
       var t = Date.now(), ref = db.collection('chats').doc(chatId);
-      return ref.collection('messages').add({ from: S.uid, name: S.me.name, text: '', file: { id: fref.id, name: f.name, size: f.size, mime: mime }, t: t, at: TS() })
-        .then(function () { var u = { lastText: '📎 ' + f.name, lastT: t, lastFrom: S.uid }; u['reads.' + S.uid] = t; return ref.update(u); });
+      return ref.collection('messages').add({ from: S.uid, name: S.me.name, text: '', file: Object.assign({ id: fref.id, name: f.name, size: f.size, mime: mime }, meta), t: t, at: TS() })
+        .then(function () { var u = { lastText: meta.kind ? (meta.kind === 'voice' ? '🎤 ' : '🎥 ') + mediaLabel(meta.kind) : '📎 ' + f.name, lastT: t, lastFrom: S.uid }; u['reads.' + S.uid] = t; return ref.update(u); });
     })
     .then(function () { delete CH.pending[key]; if (CH.open === chatId) renderMsgs(true); })
     .catch(function (e) { delete CH.pending[key]; renderMsgs(false); toast('File not sent: ' + e.message, 5000); });
@@ -376,6 +380,216 @@ function openFile(fid, name, mime) {
     setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
   }).catch(function (e) { toast('Could not open file: ' + e.message, 5000); })
     .then(function () { delete opening[fid]; });
+}
+
+/* ================= voice & video messages ================= */
+var MEDIA = {}, MEDIA_LOADING = {}, REC = null, COMPOSER = $('#chatSend').parentNode;
+var VOICE_MAX = 300, VIDEO_MAX = 60;
+function mediaLabel(kind) { return kind === 'voice' ? 'Voice message' : 'Video message'; }
+function fmtSec(s) { s = Math.max(0, Math.round(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function pickMime(video) {
+  if (!window.MediaRecorder) return null;
+  var list = video ? ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'] : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  for (var i = 0; i < list.length; i++) { try { if (MediaRecorder.isTypeSupported(list[i])) return list[i]; } catch (e) {} }
+  return '';
+}
+function extOf(mime) { return /mp4/.test(mime) ? 'mp4' : /ogg/.test(mime) ? 'ogg' : 'webm'; }
+function b64ToArr(b64) { var bin = atob(b64), arr = new Uint8Array(bin.length); for (var j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j); return arr; }
+
+(function addMediaUI() {
+  var css = document.createElement('style');
+  css.textContent = [
+    '.bub .media{min-width:200px}',
+    '.mplay{display:flex;align-items:center;gap:10px;cursor:pointer;padding:2px 0}',
+    '.mplay .pb{width:38px;height:38px;border-radius:50%;background:var(--red);color:#fff;display:grid;place-items:center;flex:none}',
+    '.mplay .pb svg{width:18px;height:18px;fill:currentColor;stroke:none;margin-left:2px}',
+    '.mplay b{display:block;font-size:13.5px}.mplay span{font-size:12px;color:var(--ink-3)}',
+    '.mplay.vid{flex-direction:column;align-items:stretch;gap:6px}',
+    '.mplay.vid .vbox{width:220px;max-width:100%;height:140px;border-radius:10px;background:#1E1A1A;display:grid;place-items:center}',
+    '.bub audio{width:250px;max-width:100%;display:block;height:40px}',
+    '.bub video.vm{width:250px;max-width:100%;max-height:340px;border-radius:10px;display:block;background:#000}',
+    '#recBar{display:flex;align-items:center;gap:10px;padding:8px 10px calc(8px + var(--safe-b));background:var(--card);border-top:1px solid var(--line)}',
+    '#recBar .rdot{width:12px;height:12px;border-radius:50%;background:var(--red);animation:rpblink 1s infinite;flex:none}',
+    '#recBar .rt{font-weight:700;font-variant-numeric:tabular-nums}',
+    '#recBar .rl{flex:1;font-size:13px;color:var(--ink-3)}',
+    '@keyframes rpblink{50%{opacity:.2}}',
+    '#vrec{position:fixed;inset:0;z-index:60;background:#000;display:flex;flex-direction:column}',
+    '#vrec video{flex:1;width:100%;min-height:0;object-fit:contain;background:#000}',
+    '#vrec .vbar{display:flex;align-items:center;justify-content:space-around;padding:16px 10px calc(16px + var(--safe-b));background:#111}',
+    '#vrec .vbar button{color:#fff;font-weight:600;padding:10px 14px;border-radius:22px;background:#ffffff26;min-width:90px}',
+    '#vrec .vbar button.go{background:var(--green)}',
+    '#vrec .vrbtn{width:66px;height:66px;min-width:0!important;border-radius:50%!important;background:#fff!important;display:grid;place-items:center;padding:0!important}',
+    '#vrec .vrbtn i{display:block;width:28px;height:28px;border-radius:50%;background:var(--red);transition:all .2s}',
+    '#vrec .vrbtn.on i{border-radius:6px;width:22px;height:22px}',
+    '#vrec .vtime{position:absolute;top:calc(14px + env(safe-area-inset-top));left:12px;right:12px;text-align:center;color:#fff;font-weight:700;text-shadow:0 1px 4px #000;z-index:2}'
+  ].join('\n');
+  document.head.appendChild(css);
+  var send = $('#chatSend');
+  function mk(id, label, svg) {
+    var b = document.createElement('button'); b.className = 'ib'; b.id = id; b.title = label; b.setAttribute('aria-label', label);
+    b.style.cssText = 'background:none;color:var(--ink-2)'; b.innerHTML = svg; COMPOSER.insertBefore(b, send); return b;
+  }
+  mk('chatVidMsg', 'Record a video message', '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>').onclick = startVideoMsg;
+  mk('chatMic', 'Record a voice message', '<svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>').onclick = startVoice;
+  var bar = document.createElement('div'); bar.id = 'recBar'; bar.className = 'hidden';
+  bar.innerHTML = '<button class="ib" id="recCancel" aria-label="Delete recording" title="Delete" style="background:none;color:var(--ink-2)"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/></svg></button>' +
+    '<span class="rdot"></span><span class="rt" id="recTime">0:00</span><span class="rl">Recording voice message…</span>' +
+    '<button class="ib g" id="recSend" aria-label="Send voice message" title="Send"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg></button>';
+  COMPOSER.parentNode.insertBefore(bar, COMPOSER.nextSibling);
+  $('#recCancel').onclick = function () { stopVoice(false); };
+  $('#recSend').onclick = function () { stopVoice(true); };
+  $('#chatInput').addEventListener('input', toggleMediaBtns);
+  $('#chatInput').addEventListener('keydown', function () { setTimeout(toggleMediaBtns, 0); });
+  send.addEventListener('click', function () { setTimeout(toggleMediaBtns, 0); });
+  $('#chatBack').addEventListener('click', function () {
+    if (REC && REC.kind === 'voice') stopVoice(false);
+    Object.keys(MEDIA).forEach(function (k) { var m = MEDIA[k].firstChild; if (m && m.pause) m.pause(); });
+  });
+  // only one voice/video message plays at a time
+  document.addEventListener('play', function (e) {
+    Object.keys(MEDIA).forEach(function (k) { var m = MEDIA[k].firstChild; if (m && m !== e.target && m.pause) m.pause(); });
+  }, true);
+})();
+function toggleMediaBtns() { var has = !!$('#chatInput').value.trim(); $('#chatMic').classList.toggle('hidden', has); $('#chatVidMsg').classList.toggle('hidden', has); }
+
+function mediaErr(e, what) { toast(e && e.name === 'NotAllowedError' ? 'Allow ' + what + ' access to record messages' : 'Could not record: ' + ((e && e.message) || e), 4500); }
+
+/* --- voice --- */
+function startVoice() {
+  if (REC || !CH.open) return;
+  if (S.call) return toast('Finish the call first');
+  var mime = pickMime(false);
+  if (mime === null) return toast('This device cannot record voice messages');
+  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (st) {
+    if (REC) { st.getTracks().forEach(function (t) { t.stop(); }); return; }
+    var opts = { audioBitsPerSecond: 48000 }; if (mime) opts.mimeType = mime;
+    var mr = new MediaRecorder(st, opts);
+    var r = REC = { kind: 'voice', mr: mr, stream: st, chunks: [], t0: Date.now(), chat: CH.open };
+    mr.ondataavailable = function (e) { if (e.data && e.data.size) r.chunks.push(e.data); };
+    mr.start(1000);
+    COMPOSER.classList.add('hidden'); $('#recBar').classList.remove('hidden'); $('#recTime').textContent = '0:00';
+    r.timer = setInterval(function () { var s = (Date.now() - r.t0) / 1000; $('#recTime').textContent = fmtSec(s); if (s >= VOICE_MAX) stopVoice(true); }, 250);
+  }).catch(function (e) { mediaErr(e, 'microphone'); });
+}
+function stopVoice(send) {
+  var r = REC; if (!r || r.kind !== 'voice') return; REC = null;
+  clearInterval(r.timer);
+  $('#recBar').classList.add('hidden'); COMPOSER.classList.remove('hidden');
+  var dur = (Date.now() - r.t0) / 1000;
+  r.mr.onstop = function () {
+    r.stream.getTracks().forEach(function (t) { t.stop(); });
+    if (!send) return;
+    if (dur < 1 || !r.chunks.length) return toast('Too short — tap the mic, speak, then tap send');
+    var type = String(r.mr.mimeType || (r.chunks[0] && r.chunks[0].type) || 'audio/webm').split(';')[0] || 'audio/webm';
+    sendMediaBlob(r.chat, new Blob(r.chunks, { type: type }), 'voice', dur);
+  };
+  try { r.mr.stop(); } catch (e) { r.mr.onstop(); }
+}
+
+/* --- video --- */
+function startVideoMsg() {
+  if (REC || !CH.open) return;
+  if (S.call) return toast('Finish the call first');
+  var mime = pickMime(true);
+  if (mime === null) return toast('This device cannot record video messages');
+  navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }
+  }).then(function (st) {
+    if (REC) { st.getTracks().forEach(function (t) { t.stop(); }); return; }
+    var r = REC = { kind: 'video', stream: st, chunks: [], chat: CH.open, mime: mime, blob: null };
+    var ov = document.createElement('div'); ov.id = 'vrec';
+    ov.innerHTML = '<div class="vtime" id="vrTime">Tap the red button to record (up to 1 minute)</div>' +
+      '<video id="vrView" autoplay muted playsinline></video>' +
+      '<div class="vbar"><button id="vrCancel">Cancel</button><button class="vrbtn" id="vrBtn" aria-label="Record"><i></i></button><button id="vrSend" class="go" style="visibility:hidden">Send</button></div>';
+    document.body.appendChild(ov);
+    var v = $('#vrView'); v.srcObject = st; v.style.transform = 'scaleX(-1)'; v.play().catch(function () {});
+    $('#vrCancel').onclick = closeVideoMsg;
+    $('#vrBtn').onclick = function () { if (r.mr && r.mr.state === 'recording') stopVideoRec(r); else if (!r.mr) startVideoRec(r); };
+    $('#vrSend').onclick = function () {
+      if (!r.blob) return;
+      if (r.dur < 1) return toast('Too short — record a little longer');
+      sendMediaBlob(r.chat, r.blob, 'video', r.dur); closeVideoMsg();
+    };
+  }).catch(function (e) { mediaErr(e, 'camera and microphone'); });
+}
+function startVideoRec(r) {
+  var opts = { videoBitsPerSecond: 900000, audioBitsPerSecond: 48000 }; if (r.mime) opts.mimeType = r.mime;
+  var mr = r.mr = new MediaRecorder(r.stream, opts);
+  mr.ondataavailable = function (e) { if (e.data && e.data.size) r.chunks.push(e.data); };
+  mr.onstop = function () {
+    if (REC !== r) return;
+    r.dur = (Date.now() - r.t0) / 1000;
+    var type = String(mr.mimeType || r.mime || 'video/webm').split(';')[0] || 'video/webm';
+    r.blob = new Blob(r.chunks, { type: type });
+    r.stream.getTracks().forEach(function (t) { t.stop(); });
+    var v = $('#vrView'); if (!v) return;
+    v.srcObject = null; v.style.transform = 'none'; v.muted = false; v.loop = true; v.controls = true;
+    v.src = r.url = URL.createObjectURL(r.blob); fixDuration(v, true);
+    $('#vrBtn').style.visibility = 'hidden'; $('#vrSend').style.visibility = 'visible';
+    $('#vrTime').textContent = 'Preview · ' + fmtSec(r.dur) + ' — tap Send';
+  };
+  r.t0 = Date.now(); mr.start(1000); $('#vrBtn').classList.add('on');
+  r.timer = setInterval(function () { var s = (Date.now() - r.t0) / 1000; $('#vrTime').textContent = '● Recording ' + fmtSec(s) + ' / 1:00'; if (s >= VIDEO_MAX) stopVideoRec(r); }, 250);
+}
+function stopVideoRec(r) { clearInterval(r.timer); $('#vrBtn').classList.remove('on'); try { r.mr.stop(); } catch (e) {} }
+function closeVideoMsg() {
+  var r = REC;
+  if (r && r.kind === 'video') {
+    REC = null; clearInterval(r.timer);
+    try { if (r.mr && r.mr.state === 'recording') r.mr.stop(); } catch (e) {}
+    r.stream.getTracks().forEach(function (t) { t.stop(); });
+    if (r.url) setTimeout(function () { URL.revokeObjectURL(r.url); }, 1000);
+  }
+  var ov = $('#vrec'); if (ov) { var v = ov.querySelector('video'); if (v) v.pause(); ov.remove(); }
+}
+
+/* --- sending & playing --- */
+function sendMediaBlob(chatId, blob, kind, dur) {
+  var mime = blob.type || (kind === 'voice' ? 'audio/webm' : 'video/webm');
+  var stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  var f = new File([blob], mediaLabel(kind) + ' ' + stamp + '.' + extOf(mime), { type: mime });
+  sendFile(f, { kind: kind, dur: Math.max(1, Math.round(dur)) }, chatId);
+}
+// Recorded WebM files often don't say how long they are; this makes the progress bar work.
+function fixDuration(el, autoplay) {
+  el.addEventListener('loadedmetadata', function () {
+    if (el.duration === Infinity || isNaN(el.duration)) {
+      el.currentTime = 1e101;
+      el.addEventListener('timeupdate', function f() { el.removeEventListener('timeupdate', f); el.currentTime = 0; if (autoplay) el.play().catch(function () {}); });
+    } else if (autoplay) el.play().catch(function () {});
+  });
+}
+function hydrateMedia(box) {
+  box.querySelectorAll('.media[data-mid]').forEach(function (ph) {
+    var id = ph.dataset.mid;
+    if (MEDIA[id]) { ph.appendChild(MEDIA[id]); return; }
+    var kind = ph.dataset.kind, dur = +ph.dataset.dur || 0, busy = MEDIA_LOADING[id];
+    var play = '<span class="pb"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>';
+    ph.innerHTML = kind === 'video'
+      ? '<div class="mplay vid"><div class="vbox">' + play + '</div><span>🎥 Video message · ' + fmtSec(dur) + (busy ? ' · loading…' : '') + '</span></div>'
+      : '<div class="mplay">' + play + '<div><b>🎤 Voice message</b><span>' + fmtSec(dur) + (busy ? ' · loading…' : ' · tap to play') + '</span></div></div>';
+  });
+}
+$('#msgs').addEventListener('click', function (e) {
+  var ph = e.target.closest('.media[data-mid]'); if (!ph || MEDIA[ph.dataset.mid]) return;
+  loadMedia(ph.dataset.mid, ph.dataset.kind, ph.dataset.mime);
+});
+function loadMedia(id, kind, mime) {
+  if (MEDIA_LOADING[id]) return;
+  MEDIA_LOADING[id] = true; renderMsgs(false);
+  db.collection('files').doc(id).collection('chunks').get().then(function (snap) {
+    var parts = snap.docs.map(function (d) { return d.data(); }).sort(function (a, b) { return a.i - b.i; });
+    if (!parts.length) throw new Error('it is still being sent');
+    var url = URL.createObjectURL(new Blob(parts.map(function (p) { return b64ToArr(p.d); }), { type: mime || (kind === 'voice' ? 'audio/webm' : 'video/webm') }));
+    var el = document.createElement(kind === 'video' ? 'video' : 'audio');
+    el.controls = true; el.preload = 'auto'; el.setAttribute('playsinline', '');
+    if (kind === 'video') el.className = 'vm';
+    fixDuration(el, true); el.src = url;
+    var wrap = document.createElement('div'); wrap.appendChild(el);
+    MEDIA[id] = wrap; delete MEDIA_LOADING[id];
+    var ph = document.querySelector('.media[data-mid="' + id + '"]'); if (ph) { ph.innerHTML = ''; ph.appendChild(wrap); }
+  }).catch(function (e) { delete MEDIA_LOADING[id]; renderMsgs(false); toast('Could not play: ' + e.message, 4500); });
 }
 
 /* ================= group calls (everyone connects to everyone, audio) ================= */
