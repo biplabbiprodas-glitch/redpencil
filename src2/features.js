@@ -674,7 +674,7 @@ function deleteMessage(chatId, m) {
 var G = null;
 $('#btnGroupCall').onclick = function () {
   if (S.call) return toast('You are already on a call');
-  openPicker({ title: 'Group call', sub: 'Choose who to call (up to 7)', withName: false, ok: 'Call' }).then(function (r) {
+  openPicker({ title: 'Start a meeting', sub: 'Choose who to invite (up to 7)', withName: false, ok: 'Start meeting' }).then(function (r) {
     if (!r) return;
     if (r.uids.length > 7) return toast('Choose up to 7 people for a group call');
     startGroupCall(r.uids, '');
@@ -741,6 +741,7 @@ function joinRoom(roomId, name, stream, dir) {
       levelTick();
     }, 500);
     renderTiles();
+    meetingStart(G);
   }).catch(function (e) { toast(e && e.name === 'NotAllowedError' ? 'Allow microphone access to join' : 'Could not join: ' + (e.message || e), 4500); });
 }
 function sendSignal(to, type, data) {
@@ -756,12 +757,14 @@ function createPeer(uid, initiator) {
   G.stream.getTracks().forEach(function (t) { pc.addTrack(t, G.stream); });
   pc.onicecandidate = function (e) { if (e.candidate) sendSignal(uid, 'candidate', e.candidate.toJSON()); };
   pc.ontrack = function (e) {
+    if (e.track.kind === 'video') { meetingTrack(peer, e.track); return; }
     var st = e.streams[0] || new MediaStream([e.track]);
     audio.srcObject = st; audio.play().catch(function () {});
     try { var ctx = getCtx(); var src = ctx.createMediaStreamSource(st); var an = ctx.createAnalyser(); an.fftSize = 256; src.connect(an); peer.an = an; } catch (er) {}
   };
   pc.onconnectionstatechange = function () {
     peer.state = pc.connectionState === 'connected' ? 'connected' : pc.connectionState === 'failed' ? 'failed' : pc.connectionState === 'disconnected' ? 'reconnecting' : peer.state;
+    if (peer.state === 'connected' && G && G.share) addShareTo(peer);
     renderTiles();
   };
   if (initiator) {
@@ -781,7 +784,7 @@ function handleSignal(s) {
       .then(function (a) { return pc.setLocalDescription(a).then(function () { sendSignal(s.from, 'answer', { type: a.type, sdp: a.sdp }); }); })
       .catch(function () {});
   } else if (s.type === 'answer') {
-    if (peer && !peer.pc.currentRemoteDescription) peer.pc.setRemoteDescription(data).then(function () { flushQ(peer); }).catch(function () {});
+    if (peer && peer.pc.signalingState === 'have-local-offer') peer.pc.setRemoteDescription(data).then(function () { flushQ(peer); }).catch(function () {});
   } else if (s.type === 'candidate') {
     var cand = new RTCIceCandidate(data);
     if (peer && peer.pc.remoteDescription) peer.pc.addIceCandidate(cand).catch(function () {});
@@ -818,7 +821,9 @@ function levelTick() {
 }
 function leaveGroup() {
   if (!G) return;
-  var g = G; G = null;
+  var g = G;
+  meetingEnd(g);
+  G = null;
   clearInterval(g.timer);
   g.unsubs.forEach(function (u) { try { u(); } catch (e) {} });
   g.peers.forEach(function (p) { try { p.pc.close(); } catch (e) {} if (p.audio) p.audio.remove(); });
@@ -883,4 +888,311 @@ function declineInvite(c, result) {
   if (S.call === c) S.call = null;
   $('#callStatus').textContent = result === 'missed' ? 'Missed group call' : 'Declined';
   setTimeout(function () { if (!S.call) $('#call').classList.add('hidden'); }, 900);
+}
+
+/* ================= meeting tools: screen share, meeting chat, minutes ================= */
+var MT = { panel: null, unread: 0, dirty: false, saveTimer: null, lastMinutes: null };
+var CAN_SHARE = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && !(window.Capacitor && Capacitor.getPlatform && Capacitor.getPlatform() === 'android');
+(function addMeetingUI() {
+  var gb = $('#btnGroupCall'); if (gb && gb.lastChild && gb.lastChild.nodeType === 3) gb.lastChild.textContent = 'Meeting';
+  var css = document.createElement('style');
+  css.textContent = [
+    '#gScreen{flex:1;min-height:0;display:flex;flex-direction:column;background:#000;border-radius:14px;overflow:hidden;margin-top:12px;position:relative}',
+    '#gScreen video{flex:1;min-height:0;width:100%;object-fit:contain;background:#000}',
+    '#gScreen .gsBar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#000c;font-size:12.5px}',
+    '#gScreen .gsBar span{flex:1;color:#ffffffcc}',
+    '#gScreen .gsBar button{color:#fff;background:#ffffff26;border-radius:14px;padding:5px 10px;font-size:12px}',
+    '#gScreen.big{position:fixed;inset:0;z-index:40;border-radius:0;margin:0}',
+    '#gcall.sharing .tiles{flex:none;display:flex;gap:8px;overflow-x:auto;padding:10px 0 6px;align-content:normal}',
+    '#gcall.sharing .tile{min-width:88px;padding:8px 6px}',
+    '#gcall.sharing .tile .av2{width:38px;height:38px;font-size:14px;margin-bottom:4px}',
+    '#gcall.sharing .tile b{font-size:12px}#gcall.sharing .tile span{font-size:10.5px}',
+    '#gcall .call-ctrls.mt{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 6px;justify-items:center}',
+    '#gcall .cb.on i{background:#fff;color:#1E1A1A}',
+    '#gcall .cb{position:relative}',
+    '#gcall .cb .bdg{position:absolute;top:-2px;right:calc(50% - 36px);min-width:20px;height:20px;border-radius:10px;background:#C8102E;color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 5px}',
+    '#gPanel{position:absolute;left:0;right:0;bottom:0;height:68%;z-index:25;background:var(--card);color:var(--ink);border-radius:18px 18px 0 0;display:flex;flex-direction:column;box-shadow:0 -10px 30px #0006}',
+    '#gPanel .gpHead{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}',
+    '#gPanel .gpTabs{flex:1;display:flex;gap:6px}',
+    '#gPanel .gpTabs button{padding:8px 14px;border-radius:18px;font-weight:600;color:var(--ink-2);background:var(--bg)}',
+    '#gPanel .gpTabs button.on{background:var(--red);color:#fff}',
+    '#gPanel #gpClose{width:36px;height:36px;border-radius:50%;background:var(--bg);font-size:16px;color:var(--ink-2)}',
+    '#gPanel .gpBody{flex:1;min-height:0;display:flex;flex-direction:column}',
+    '#gmList{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px}',
+    '#gmList .gm{max-width:82%;background:var(--bg);border-radius:14px;padding:8px 11px;font-size:14px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word;align-self:flex-start}',
+    '#gmList .gm.me{align-self:flex-end;background:#C8102E14}',
+    '#gmList .gm i{display:block;font-style:normal;font-size:11.5px;font-weight:700;color:var(--red);margin-bottom:2px}',
+    '#gmList .gm small{display:block;font-size:10.5px;color:var(--ink-3);margin-top:3px;text-align:right}',
+    '#gmList .empty{margin:auto;color:var(--ink-3);font-size:13.5px;text-align:center}',
+    '.gmIn{display:flex;gap:8px;padding:10px 12px calc(10px + var(--safe-b));border-top:1px solid var(--line)}',
+    '.gmIn input{flex:1;border:1px solid var(--line);border-radius:22px;padding:10px 14px;font-size:15px;background:var(--bg);color:var(--ink)}',
+    '.gmIn button,.gmBtns button{background:var(--red);color:#fff;border-radius:22px;padding:0 16px;font-weight:600;min-height:40px}',
+    '#gMinutes{flex:1;min-height:0;margin:12px 12px 0;border:1px solid var(--line);border-radius:12px;padding:12px;font:14px/1.5 inherit;font-family:inherit;resize:none;background:var(--bg);color:var(--ink)}',
+    '.gmBtns{display:flex;align-items:center;gap:8px;padding:10px 12px calc(10px + var(--safe-b))}',
+    '.gmBtns span{flex:1;font-size:12px;color:var(--ink-3)}',
+    '.gmBtns button.alt{background:var(--bg);color:var(--ink);border:1px solid var(--line)}'
+  ].join('\n');
+  document.head.appendChild(css);
+
+  var scr = document.createElement('div'); scr.id = 'gScreen'; scr.className = 'hidden';
+  scr.innerHTML = '<video id="gScreenV" autoplay playsinline muted></video><div class="gsBar"><span id="gScreenWho"></span><button id="gScreenBig">⛶ Full screen</button></div>';
+  $('#gTiles').parentNode.insertBefore(scr, $('#gTiles'));
+  $('#gScreenBig').onclick = function () {
+    var el = $('#gScreen');
+    if (document.fullscreenElement) { document.exitFullscreen().catch(function () {}); return; }
+    if (el.classList.contains('big')) { el.classList.remove('big'); this.textContent = '⛶ Full screen'; return; }
+    if (el.requestFullscreen) el.requestFullscreen().catch(function () { el.classList.add('big'); $('#gScreenBig').textContent = '✕ Exit full screen'; });
+    else { el.classList.add('big'); this.textContent = '✕ Exit full screen'; }
+  };
+
+  var ctr = $('#gLeave').parentNode; ctr.classList.add('mt');
+  function mk(id, label, svg) { var b = document.createElement('button'); b.className = 'cb'; b.id = id; b.innerHTML = '<i>' + svg + '</i><span class="lb">' + label + '</span>'; return b; }
+  var share = mk('gShare', 'Share screen', '<svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M12 13V7M9 10l3-3 3 3"/></svg>');
+  var chat = mk('gChatBtn', 'Chat', '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>');
+  var mins = mk('gMinBtn', 'Minutes', '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>');
+  if (!CAN_SHARE) share.classList.add('hidden');
+  // two rows: Mute · Share · Add people / Chat · Minutes · Leave
+  [ $('#gMute'), share, $('#gAdd'), chat, mins, $('#gLeave') ].forEach(function (b) { ctr.appendChild(b); });
+  share.onclick = function () { if (G && G.share) stopShare(); else startShare(); };
+  chat.onclick = function () { openMeetPanel(MT.panel === 'chat' ? null : 'chat'); };
+  mins.onclick = function () { openMeetPanel(MT.panel === 'minutes' ? null : 'minutes'); };
+
+  var pn = document.createElement('div'); pn.id = 'gPanel'; pn.className = 'hidden';
+  pn.innerHTML = '<div class="gpHead"><div class="gpTabs"><button data-p="chat">💬 Chat</button><button data-p="minutes">📝 Minutes</button></div><button id="gpClose" aria-label="Close">✕</button></div>' +
+    '<div id="gpChat" class="gpBody"><div id="gmList"></div><div class="gmIn"><input id="gmText" placeholder="Message everyone in the meeting" autocomplete="off"><button id="gmSend">Send</button></div></div>' +
+    '<div id="gpMin" class="gpBody hidden"><textarea id="gMinutes" placeholder="Meeting minutes — everyone in the meeting can see and edit these."></textarea>' +
+    '<div class="gmBtns"><span id="gMinState">Shared with everyone in the meeting</span><button class="alt" id="gMinCopy">Copy</button><button id="gMinSend">Send to chat</button></div></div>';
+  $('#gcall').appendChild(pn);
+  pn.querySelectorAll('.gpTabs button').forEach(function (b) { b.onclick = function () { openMeetPanel(b.dataset.p); }; });
+  $('#gpClose').onclick = function () { openMeetPanel(null); };
+  $('#gmSend').onclick = sendMeetChat;
+  $('#gmText').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); sendMeetChat(); } });
+  $('#gMinutes').addEventListener('input', minutesTyped);
+  $('#gMinCopy').onclick = function () {
+    var t = $('#gMinutes').value;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('Minutes copied'); })
+      .catch(function () { $('#gMinutes').select(); try { document.execCommand('copy'); toast('Minutes copied'); } catch (e) {} });
+  };
+  $('#gMinSend').onclick = function () { if (G) sendMinutesToChat(G, true); };
+})();
+
+function meetingStart(g) {
+  MT.panel = null; MT.unread = 0; MT.dirty = false; MT.lastMinutes = null; clearTimeout(MT.saveTimer);
+  $('#gPanel').classList.add('hidden'); $('#gmList').innerHTML = ''; $('#gMinutes').value = ''; $('#gmText').value = '';
+  $('#gMinState').textContent = 'Shared with everyone in the meeting';
+  setShareBtn(false); setBadge();
+  g.chat = []; g.room = {};
+  updateScreen();
+  g.unsubs.push(g.ref.onSnapshot(function (s) {
+    if (G !== g) return;
+    g.room = s.data() || {};
+    var m = g.room.minutes;
+    if (typeof m === 'string' && m !== MT.lastMinutes) {
+      MT.lastMinutes = m;
+      if (!MT.dirty) {
+        var ta = $('#gMinutes'), focused = document.activeElement === ta, pos = ta.selectionStart;
+        ta.value = m;
+        if (focused) { try { ta.setSelectionRange(pos, pos); } catch (e) {} }
+        if (g.room.minutesBy && g.room.minutesBy !== S.me.name) $('#gMinState').textContent = 'Updated by ' + g.room.minutesBy.split(' ')[0];
+      }
+    }
+    updateScreen();
+  }, function () {}));
+  g.unsubs.push(g.ref.collection('chat').orderBy('t').limitToLast(300).onSnapshot(function (snap) {
+    if (G !== g) return;
+    var fresh = 0;
+    snap.docChanges().forEach(function (ch) { if (ch.type === 'added' && ch.doc.data().from !== S.uid && (ch.doc.data().t || 0) > g.joinedAt - 2000) fresh++; });
+    g.chat = snap.docs.map(function (d) { return d.data(); });
+    renderMeetChat();
+    if (fresh && MT.panel !== 'chat') { MT.unread += fresh; setBadge(); try { chime(); } catch (e) {} }
+  }, function () {}));
+}
+
+function meetingEnd(g) {
+  if (g.share) stopShare();
+  if (MT.dirty) { clearTimeout(MT.saveTimer); saveMinutes(g); }
+  // the last person to leave sends the minutes to the meeting's chat, so they're never lost
+  var others = Object.keys(g.parts || {}).filter(function (u) { return u !== S.uid && !g.parts[u].left; });
+  var text = $('#gMinutes').value;
+  if (!others.length && minutesHaveContent(text) && text !== (g.room && g.room.minutesSentText)) sendMinutesToChat(g, false, text);
+  $('#gPanel').classList.add('hidden'); MT.panel = null;
+  $('#gScreen').classList.add('hidden'); $('#gScreen').classList.remove('big'); $('#gcall').classList.remove('sharing');
+  $('#gScreenV').srcObject = null;
+  if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+}
+
+/* --- panel --- */
+function openMeetPanel(which) {
+  MT.panel = which;
+  $('#gPanel').classList.toggle('hidden', !which);
+  if (!which) return;
+  $('#gPanel').querySelectorAll('.gpTabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.p === which); });
+  $('#gpChat').classList.toggle('hidden', which !== 'chat');
+  $('#gpMin').classList.toggle('hidden', which !== 'minutes');
+  if (which === 'chat') { MT.unread = 0; setBadge(); renderMeetChat(); setTimeout(function () { $('#gmText').focus(); }, 50); }
+  if (which === 'minutes' && G && !$('#gMinutes').value.trim() && !(G.room && G.room.minutes)) {
+    $('#gMinutes').value = minutesTemplate(G); minutesTyped();
+  }
+}
+function setBadge() {
+  var b = $('#gChatBtn'), x = b.querySelector('.bdg');
+  if (MT.unread > 0) { if (!x) { x = document.createElement('span'); x.className = 'bdg'; b.appendChild(x); } x.textContent = MT.unread > 9 ? '9+' : MT.unread; }
+  else if (x) x.remove();
+}
+
+/* --- meeting chat --- */
+function renderMeetChat() {
+  if (!G) return;
+  var box = $('#gmList'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  box.innerHTML = G.chat.length ? G.chat.map(function (m) {
+    var me = m.from === S.uid;
+    return '<div class="gm' + (me ? ' me' : '') + '">' + (me ? '' : '<i>' + esc((m.name || 'Colleague').split(' ')[0]) + '</i>') + esc(m.text || '') +
+      '<small>' + new Date(m.t || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '</small></div>';
+  }).join('') : '<div class="empty">Messages here are seen by everyone in this meeting.</div>';
+  if (atEnd || MT.panel === 'chat') box.scrollTop = box.scrollHeight;
+}
+function sendMeetChat() {
+  var inp = $('#gmText'), text = inp.value.trim();
+  if (!text || !G) return;
+  inp.value = '';
+  G.ref.collection('chat').add({ from: S.uid, name: S.me.name, text: text.slice(0, 2000), t: Date.now() })
+    .catch(function (e) { toast('Not sent: ' + e.message, 4000); inp.value = text; });
+}
+
+/* --- minutes --- */
+function minutesTemplate(g) {
+  var names = [S.me.name].concat(Object.keys(g.parts || {}).filter(function (u) { return u !== S.uid && !g.parts[u].left; }).map(function (u) { return g.parts[u].name; }));
+  var d = new Date();
+  return 'Meeting: ' + (g.name || 'Meeting') + '\n' +
+    'Date: ' + d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '\n' +
+    'Attendees: ' + names.join(', ') + '\n\n' +
+    'Agenda\n• \n\nDiscussion\n• \n\nDecisions\n• \n\nAction items (who – what – by when)\n• \n';
+}
+function minutesHaveContent(t) {
+  if (!t) return false;
+  return t.split('\n').some(function (l) { return /^•\s*\S/.test(l.trim()) || (l.trim() && !/^(Meeting|Date|Attendees):|^(Agenda|Discussion|Decisions|Action items)/.test(l.trim()) && l.trim() !== '•'); });
+}
+function minutesTyped() {
+  MT.dirty = true; $('#gMinState').textContent = 'Saving…';
+  clearTimeout(MT.saveTimer);
+  var g = G;
+  MT.saveTimer = setTimeout(function () { if (g && G === g) saveMinutes(g); }, 800);
+}
+function saveMinutes(g) {
+  var val = $('#gMinutes').value;
+  MT.lastMinutes = val;
+  g.ref.update({ minutes: val, minutesBy: S.me.name, minutesAt: Date.now() })
+    .then(function () { if (G === g && $('#gMinutes').value === val) { MT.dirty = false; $('#gMinState').textContent = 'Saved · everyone can see these'; } })
+    .catch(function (e) { $('#gMinState').textContent = 'Not saved: ' + e.message; });
+}
+// Post the minutes into the chat of the people in this meeting (their group chat, or a new one named after the meeting).
+function sendMinutesToChat(g, byHand, textOverride) {
+  var text = textOverride != null ? textOverride : $('#gMinutes').value;
+  if (!minutesHaveContent(text)) { if (byHand) toast('Write the minutes first'); return; }
+  var members = ((g.room && g.room.members) || [S.uid]).slice().sort();
+  var found = null;
+  CH.chats.forEach(function (c, id) { if (!found && c.members && c.members.slice().sort().join() === members.join()) found = id; });
+  var chatP;
+  if (found) chatP = Promise.resolve(found);
+  else if (members.length === 2) {
+    var id = 'dm_' + members.join('_'), names = {};
+    members.forEach(function (m) { names[m] = m === S.uid ? S.me.name : nameOf(m); });
+    var ref0 = db.collection('chats').doc(id);
+    chatP = ref0.get().then(function (s) { if (s.exists) return id; return ref0.set({ members: members, group: false, names: names, createdAt: TS(), lastT: 0, lastText: '', lastFrom: '', reads: {} }).then(function () { return id; }); });
+  } else {
+    var ref1 = db.collection('chats').doc(), nm = {};
+    members.forEach(function (m) { nm[m] = m === S.uid ? S.me.name : nameOf(m); });
+    chatP = ref1.set({ members: members, group: true, name: g.name || 'Meeting', createdBy: S.uid, names: nm, createdAt: TS(), lastT: Date.now(), lastText: 'Meeting chat', lastFrom: S.uid, reads: {} }).then(function () { return ref1.id; });
+  }
+  chatP.then(function (chatId) {
+    var t = Date.now(), cref = db.collection('chats').doc(chatId);
+    var body = '📝 Meeting minutes — ' + (g.name || 'Meeting') + '\n\n' + text.trim();
+    return cref.collection('messages').add({ from: S.uid, name: S.me.name, text: body.slice(0, 20000), t: t, at: TS() }).then(function () {
+      var u = { lastText: '📝 Meeting minutes', lastT: t, lastFrom: S.uid }; u['reads.' + S.uid] = t;
+      cref.update(u).catch(function () {});
+      g.ref.update({ minutesSentText: text }).catch(function () {});
+      toast(byHand ? 'Minutes sent to the chat' : 'Meeting minutes saved to the chat');
+    });
+  }).catch(function (e) { if (byHand) toast('Could not send minutes: ' + e.message, 4500); });
+}
+
+/* --- screen share --- */
+function setShareBtn(on) {
+  var b = $('#gShare'); if (!b) return;
+  b.classList.toggle('on', on); b.querySelector('.lb').textContent = on ? 'Stop sharing' : 'Share screen';
+}
+function startShare() {
+  if (!G) return;
+  var g = G;
+  if (g.room && g.room.sharing && g.room.sharing !== S.uid && Object.keys(g.parts).indexOf(g.room.sharing) >= 0 && !g.parts[g.room.sharing].left)
+    return toast((g.room.sharingName || 'Someone').split(' ')[0] + ' is sharing their screen right now');
+  navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 12, max: 15 }, width: { max: 1920 }, height: { max: 1080 } }, audio: false }).then(function (st) {
+    if (G !== g) { st.getTracks().forEach(function (t) { t.stop(); }); return; }
+    var track = st.getVideoTracks()[0];
+    try { track.contentHint = 'detail'; } catch (e) {}
+    g.share = { stream: st, track: track };
+    track.addEventListener('ended', function () { if (G === g && g.share && g.share.track === track) stopShare(); });
+    g.peers.forEach(function (p) { addShareTo(p); });
+    g.ref.update({ sharing: S.uid, sharingName: S.me.name }).catch(function () {});
+    setShareBtn(true);
+    updateScreen();
+  }).catch(function (e) {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'AbortError')) {
+      if (/system|permission/i.test(e.message || '')) toast('Allow screen recording for Redpencil Phone in your computer settings, then restart the app', 6000);
+      return;
+    }
+    toast('Could not share screen: ' + ((e && e.message) || e), 4500);
+  });
+}
+function addShareTo(p) {
+  if (!G || !G.share || p.shareSender || p.state !== 'connected') return;
+  try {
+    p.shareSender = p.pc.addTrack(G.share.track, G.share.stream);
+    try { var prm = p.shareSender.getParameters(); prm.encodings = prm.encodings && prm.encodings.length ? prm.encodings : [{}]; prm.encodings[0].maxBitrate = 1200000; p.shareSender.setParameters(prm).catch(function () {}); } catch (e) {}
+    renegotiate(p);
+  } catch (e) {}
+}
+function renegotiate(p) {
+  var pc = p.pc;
+  if (pc.signalingState !== 'stable') { setTimeout(function () { if (G && G.peers.get(p.uid) === p) renegotiate(p); }, 400); return; }
+  pc.createOffer().then(function (o) { return pc.setLocalDescription(o).then(function () { sendSignal(p.uid, 'offer', { type: o.type, sdp: o.sdp }); }); }).catch(function () {});
+}
+function stopShare() {
+  var g = G; if (!g || !g.share) return;
+  var sh = g.share; g.share = null;
+  sh.stream.getTracks().forEach(function (t) { t.stop(); });
+  g.peers.forEach(function (p) {
+    if (!p.shareSender) return;
+    try { p.pc.removeTrack(p.shareSender); } catch (e) {}
+    p.shareSender = null;
+    if (p.state === 'connected') renegotiate(p);
+  });
+  if (g.room && g.room.sharing === S.uid) g.ref.update({ sharing: null, sharingName: null }).catch(function () {});
+  setShareBtn(false);
+  updateScreen();
+}
+function meetingTrack(peer, track) {
+  peer.screen = new MediaStream([track]);
+  track.addEventListener('unmute', updateScreen);
+  track.addEventListener('mute', updateScreen);
+  track.addEventListener('ended', function () { if (peer.screen && peer.screen.getVideoTracks()[0] === track) peer.screen = null; updateScreen(); });
+  updateScreen();
+}
+function updateScreen() {
+  if (!G) return;
+  var v = $('#gScreenV'), box = $('#gScreen'), src = null, who = '';
+  if (G.share) { src = G.share.stream; who = 'You are sharing your screen'; }
+  else {
+    var uid = G.room && G.room.sharing, p = uid && G.peers.get(uid);
+    var tr = p && p.screen && p.screen.getVideoTracks()[0];
+    if (tr && tr.readyState === 'live') { src = p.screen; who = (G.room.sharingName || nameOf(uid)).split(' ')[0] + ' is sharing their screen'; }
+  }
+  if (!src) {
+    box.classList.add('hidden'); box.classList.remove('big'); $('#gcall').classList.remove('sharing');
+    if (v.srcObject) v.srcObject = null;
+    return;
+  }
+  if (v.srcObject !== src) { v.srcObject = src; v.play().catch(function () {}); }
+  $('#gScreenWho').textContent = who;
+  box.classList.remove('hidden'); $('#gcall').classList.add('sharing');
 }
