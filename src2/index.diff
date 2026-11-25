@@ -1,0 +1,177 @@
+--- /tmp/oldsrc/www/index.html	2026-11-25 09:18:10.000000000 +0600
++++ www/index.html	2026-11-25 12:41:21.796664831 +0600
+@@ -119,6 +119,53 @@
+ .incall-keys button{height:52px;border-radius:14px;background:#ffffff1a;color:#fff;font-size:22px}
+ #toast{position:absolute;left:50%;bottom:calc(84px + var(--safe-b));transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:13.5px;z-index:50;max-width:88%;text-align:center;opacity:0;transition:opacity .2s;pointer-events:none}
+ #toast.show{opacity:1}
++/* staff actions */
++.actions{display:flex;gap:8px;margin-bottom:12px}
++.actions .btn{margin:0;flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;font-size:13.5px}
++.actions .btn svg{width:17px;height:17px}
++.ib.m{color:#2C6CB0;background:#E8F0FA}
++.unread{background:var(--red);color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;border-radius:10px;display:grid;place-items:center;padding:0 6px}
++.row.tap{cursor:pointer}
++.row .meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:11.5px;color:var(--ink-3)}
++/* full-screen panels (chat, picker) */
++.panel{position:absolute;inset:0;background:var(--paper);z-index:15;display:flex;flex-direction:column}
++.panel header .back{width:36px;height:36px;display:grid;place-items:center;border-radius:50%;margin-left:-6px}
++.panel header .back svg{width:22px;height:22px}
++.msgs{flex:1;overflow:auto;padding:12px 12px 6px;display:flex;flex-direction:column;gap:6px;background:#F6F0EC}
++.bub{max-width:80%;padding:8px 11px;border-radius:14px;background:#fff;border:1px solid var(--line);align-self:flex-start;word-wrap:break-word;white-space:pre-wrap;font-size:14.5px}
++.bub.me{align-self:flex-end;background:#FBE3E6;border-color:#F3C7CD}
++.bub .who{font-size:11.5px;font-weight:700;color:var(--red-d);margin-bottom:2px}
++.bub .tm{font-size:10.5px;color:var(--ink-3);text-align:right;margin-top:3px}
++.bub .file{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:190px}
++.bub .file .fi{width:38px;height:38px;border-radius:10px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;flex:none}
++.bub .file .fi svg{width:20px;height:20px;color:var(--red)}
++.bub .file b{display:block;font-size:13.5px;word-break:break-all}
++.bub .file span{font-size:12px;color:var(--ink-3)}
++.bub img.thumb{display:block;max-width:220px;max-height:220px;border-radius:10px;margin-top:6px}
++.day{align-self:center;font-size:11.5px;color:var(--ink-3);background:#fff;padding:3px 10px;border-radius:10px;margin:6px 0}
++.composer{display:flex;align-items:flex-end;gap:8px;padding:8px 10px calc(8px + var(--safe-b));background:var(--card);border-top:1px solid var(--line)}
++.composer textarea{flex:1;height:42px;max-height:120px;resize:none;font:15px/1.35 inherit;padding:10px 12px;border-radius:21px;border:1px solid var(--line);font-family:inherit}
++.composer .ib{flex:none}
++.progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:6px}
++.progress i{display:block;height:100%;background:var(--red);width:0}
++/* picker */
++.pick{flex:1;overflow:auto;padding:12px 14px}
++.pick label.row{margin:0;font-size:inherit;font-weight:inherit;color:inherit;letter-spacing:0;cursor:pointer}
++.pick input[type=checkbox]{width:22px;height:22px;accent-color:var(--red);flex:none}
++.pickbar{padding:10px 14px calc(12px + var(--safe-b));background:var(--card);border-top:1px solid var(--line)}
++.pickbar .btn{margin-top:0}
++/* group call */
++#gcall{position:absolute;inset:0;background:linear-gradient(170deg,#2A1D1E 0%,#120D0E 100%);color:#fff;z-index:21;display:flex;flex-direction:column;padding:calc(20px + var(--safe-t)) 16px calc(28px + var(--safe-b))}
++#gcall h2{margin:0;font-size:19px;text-align:center}
++#gcall .sub{text-align:center;color:#ffffffaa;font-size:13.5px;margin-top:4px;font-variant-numeric:tabular-nums}
++.tiles{flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:center;padding:18px 4px;overflow:auto}
++.tile{background:#ffffff12;border-radius:18px;padding:16px 8px;text-align:center;position:relative}
++.tile .av2{width:64px;height:64px;border-radius:50%;background:#C8102E44;margin:0 auto 8px;display:grid;place-items:center;font-size:24px;font-weight:700;border:3px solid transparent;transition:border-color .15s}
++.tile.talk .av2{border-color:#3DDC84}
++.tile b{display:block;font-size:14px}
++.tile span{font-size:11.5px;color:#ffffff99}
++</style>
++<style>
+ .spinner{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--red);border-radius:50%;animation:spin .8s linear infinite;margin:40vh auto 0}
+ @keyframes spin{to{transform:rotate(360deg)}}
+ </style>
+@@ -198,8 +245,15 @@
+     <main>
+       <div class="tabpane" id="t-contacts">
+         <input class="search" id="search" placeholder="Search name, extension or department">
++        <div class="actions">
++          <button class="btn" id="btnGroupCall"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>Group call</button>
++          <button class="btn ghost" id="btnNewGroup"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>New group chat</button>
++        </div>
+         <div id="staffList"></div>
+       </div>
++      <div class="tabpane hidden" id="t-chats">
++        <div id="chatList"></div>
++      </div>
+       <div class="tabpane hidden" id="t-keypad">
+         <div class="dial-display" id="dialNum"></div>
+         <div class="dial-hint" id="dialHint">Extension → office call · Phone number → SIP line</div>
+@@ -259,6 +313,12 @@
+           <div id="adminList" style="margin-top:10px"></div>
+         </div>
+ 
++        <div class="card hidden" id="bgCard">
++          <h3>Stay online &amp; ringing</h3>
++          <p class="muted">So calls ring even when the phone is locked or the app is in the background. Turn on all three.</p>
++          <div id="bgStatus" style="margin-top:8px"></div>
++        </div>
++
+         <div class="card">
+           <h3>App</h3>
+           <p class="muted">Keep Redpencil Phone open (or in the recent apps) to receive calls. Version 1.0</p>
+@@ -270,6 +330,7 @@
+     </main>
+     <nav id="tabs">
+       <button data-tab="contacts" class="on"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>Staff</button>
++      <button data-tab="chats"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chats<span class="badge hidden" id="chatBadge">0</span></button>
+       <button data-tab="keypad"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.6"/><circle cx="12" cy="5" r="1.6"/><circle cx="19" cy="5" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/><circle cx="5" cy="19" r="1.6"/><circle cx="12" cy="19" r="1.6"/><circle cx="19" cy="19" r="1.6"/></svg>Keypad</button>
+       <button data-tab="recents"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>Recents<span class="badge hidden" id="missedBadge">0</span></button>
+       <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+@@ -303,6 +364,51 @@
+     </div>
+   </section>
+ 
++  <!-- chat view -->
++  <section class="panel hidden" id="chatv">
++    <header>
++      <button class="back" id="chatBack" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
++      <div class="av" id="chatAv" style="width:36px;height:36px;font-size:13px">?</div>
++      <div class="t"><b id="chatTitle">—</b><span id="chatSub"></span></div>
++      <button class="ib g" id="chatCall" aria-label="Call"></button>
++      <button class="ib" id="chatVideo" aria-label="Video call"></button>
++    </header>
++    <div class="msgs" id="msgs"></div>
++    <div class="composer">
++      <button class="ib" id="chatAttach" aria-label="Send file" style="background:none;color:var(--ink-2)"><svg viewBox="0 0 24 24"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
++      <textarea id="chatInput" rows="1" placeholder="Message"></textarea>
++      <button class="ib g" id="chatSend" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
++    </div>
++    <input type="file" id="fileInput" class="hidden">
++  </section>
++
++  <!-- people picker -->
++  <section class="panel hidden" id="picker">
++    <header>
++      <button class="back" id="pickBack" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
++      <div class="t"><b id="pickTitle">Choose people</b><span id="pickSub"></span></div>
++    </header>
++    <div class="pick">
++      <div id="pickNameWrap"><label>Group name</label><input id="pickName" placeholder="e.g. Workshop team"></div>
++      <div class="section-t">Staff</div>
++      <div class="list" id="pickList"></div>
++    </div>
++    <div class="pickbar"><button class="btn" id="pickOk">Start</button></div>
++  </section>
++
++  <!-- group call -->
++  <section id="gcall" class="hidden">
++    <h2 id="gTitle">Group call</h2>
++    <div class="sub" id="gSub">Connecting…</div>
++    <div class="tiles" id="gTiles"></div>
++    <div id="gAudio" class="hidden"></div>
++    <div class="call-ctrls">
++      <button class="cb" id="gMute"><i><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg></i>Mute</button>
++      <button class="cb end" id="gLeave"><i><svg viewBox="0 0 24 24" style="transform:rotate(135deg)"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.8 2z"/></svg></i>Leave</button>
++      <button class="cb" id="gAdd"><i><svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M19 8v6M22 11h-6"/></svg></i>Add people</button>
++    </div>
++  </section>
++
+   <div id="toast"></div>
+ </div>
+ 
+@@ -490,6 +596,7 @@
+   const row = u => `<div class="row">
+       <div class="av">${esc(initials(u.name))}<span class="dot ${isOnline(u) ? 'on' : ''}"></span></div>
+       <div class="info"><b>${esc(u.name)}</b><span>Ext ${esc(u.ext)}${u.dept ? ' · ' + esc(u.dept) : ''}${isOnline(u) ? '' : ' · offline'}</span></div>
++      <button class="ib m" data-msg="${u.id}" aria-label="Message"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+       <button class="ib" data-vcall="${u.id}" aria-label="Video call">${ICON_VID}</button>
+       <button class="ib g" data-call="${u.id}" aria-label="Call">${ICON_CALL}</button></div>`;
+   let h = '';
+@@ -903,13 +1010,14 @@
+     : '<svg viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M7 17 17 7M7 7h10v10"/></svg>';
+   $('#recentList').innerHTML = '<div class="list">' + log.map((x, i) => `<div class="row ${x.result === 'missed' ? 'missed' : ''}">
+     <div class="av">${esc(initials(x.name))}</div>
+-    <div class="info"><b>${esc(x.name)}</b><span style="display:flex;align-items:center;gap:4px">${arrow(x)} ${esc(label(x))} · ${x.kind === 'sip' ? 'SIP ' + esc(x.number) : 'Ext ' + esc(x.number)}${x.video ? ' · video' : ''}</span></div>
++    <div class="info"><b>${esc(x.name)}</b><span style="display:flex;align-items:center;gap:4px">${arrow(x)} ${esc(label(x))} · ${x.kind === 'sip' ? 'SIP ' + esc(x.number) : x.kind === 'group' ? 'Group call' : 'Ext ' + esc(x.number)}${x.video ? ' · video' : ''}</span></div>
+     <span class="muted" style="font-size:12px;text-align:right">${esc(fmtWhen(x.at))}</span>
+     <button class="ib g" data-redial="${i}" aria-label="Call back">${ICON_CALL}</button></div>`).join('') + '</div>';
+ }
+ $('#recentList').onclick = e => {
+   const b = e.target.closest('[data-redial]'); if (!b) return;
+   const x = loadLog()[+b.dataset.redial]; if (!x) return;
++  if (x.kind === 'group') { toast('Start a new group call from the Staff tab'); return; }
+   if (x.kind === 'internal') { const u = S.staff.find(s => s.id === x.peerUid) || S.staff.find(s => s.ext === x.number); if (u) callInternal(u, !!x.video); else toast('This staff member is no longer in the directory'); }
+   else sipCall(x.number);
+ };
+@@ -933,5 +1041,7 @@
+   window.__previewActive = () => { const c = { kind: 'sip', dir: 'out', name: '01711000000', number: '01711000000', status: 'ringing' }; S.call = c; openCallUI(c, 'Calling…'); markActive(c); };
+ } else boot();
+ </script>
++<script src="ringtone.js"></script>
++<script src="features.js"></script>
+ </body>
+ </html>
