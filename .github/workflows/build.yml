@@ -49,15 +49,18 @@ jobs:
         working-directory: app
         run: |
           npx cap sync android
-          cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../../RedpencilPhone.apk
+          sed -i 's/minSdkVersion = 22/minSdkVersion = 24/' android/variables.gradle
+          sed -i "s/versionCode 1$/versionCode $GITHUB_RUN_NUMBER/; s/versionName \"1.0\"/versionName \"1.0.$GITHUB_RUN_NUMBER\"/" android/app/build.gradle
+          grep -n "minSdkVersion\|versionCode\|versionName" android/variables.gradle android/app/build.gradle
+          cd android && chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release-unsigned.apk ../../RedpencilPhone-unsigned.apk
       - uses: actions/upload-artifact@v4
         with:
           name: RedpencilPhone-APK
-          path: RedpencilPhone.apk
+          path: RedpencilPhone-unsigned.apk
       - name: Publish as release download
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Redpencil Phone 1.0.${{ github.run_number }}
-          files: RedpencilPhone.apk
+          files: RedpencilPhone-unsigned.apk
