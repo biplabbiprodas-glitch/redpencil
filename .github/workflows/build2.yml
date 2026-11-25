@@ -1,0 +1,77 @@
+name: Build Redpencil Phone v2
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build2.yml', 'src2/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble app source
+        run: |
+          python3 -c "import re,base64; s=open('.github/workflows/build.yml').read(); b=re.search(r\"echo '([A-Za-z0-9+/=]+)' \| base64\", s).group(1); open('base.tar.xz','wb').write(base64.b64decode(b))"
+          mkdir app && tar -xJf base.tar.xz -C app
+          patch app/www/index.html src2/index.diff
+          cp src2/features.js ringtone.js app/www/
+          mkdir -p app/native && cp src2/native/* app/native/
+          grep -c features.js app/www/index.html
+          find app -type f | sort
+      - name: Icons and settings
+        working-directory: app
+        run: |
+          pip install pillow
+          python3 ../make_logo_icons.py
+          cp ../app-config.js www/config.js
+          grep -q redpencil-phone www/config.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Bundle libraries
+        working-directory: app
+        run: |
+          mkdir -p www/vendor libs && cd libs && npm init -y >/dev/null
+          npm install firebase@10.12.2 jssip@3.10.1 esbuild@0.24.0
+          for f in app auth firestore; do cp node_modules/firebase/firebase-$f-compat.js ../www/vendor/; done
+          echo "window.JsSIP=require('jssip');" > entry.js
+          npx esbuild entry.js --bundle --minify --format=iife --outfile=../www/vendor/jssip.min.js
+          cd .. && rm -rf libs && ls -la www/vendor
+      - name: Create Android project with Redpencil native code
+        working-directory: app
+        run: |
+          npm install
+          npx cap add android
+          python3 native/patch_manifest.py android/app/src/main/AndroidManifest.xml
+          cp native/*.java android/app/src/main/java/com/redpencil/phone/
+          ls android/app/src/main/java/com/redpencil/phone/
+          cat android/app/src/main/AndroidManifest.xml
+      - name: App icon
+        continue-on-error: true
+        working-directory: app
+        run: npx capacitor-assets generate --android --iconBackgroundColor '#FFFFFF' --splashBackgroundColor '#FBF7F4'
+      - name: Build APK
+        working-directory: app
+        run: |
+          npx cap sync android
+          sed -i 's/minSdkVersion = 22/minSdkVersion = 24/' android/variables.gradle
+          sed -i "s/versionCode 1$/versionCode $((GITHUB_RUN_NUMBER + 100))/; s/versionName \"1.0\"/versionName \"2.0.$GITHUB_RUN_NUMBER\"/" android/app/build.gradle
+          grep -n "minSdkVersion\|versionCode\|versionName" android/variables.gradle android/app/build.gradle
+          cd android && chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release-unsigned.apk ../../RedpencilPhone-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RedpencilPhone-v2-APK
+          path: RedpencilPhone-unsigned.apk
+      - name: Publish as release download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.${{ github.run_number }}
+          name: Redpencil Phone 2.0.${{ github.run_number }}
+          files: RedpencilPhone-unsigned.apk
