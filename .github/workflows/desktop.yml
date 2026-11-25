@@ -1,0 +1,79 @@
+name: Build Redpencil Phone desktop (Mac & Windows)
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/desktop.yml', 'desktop/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Assemble app
+        run: |
+          python3 -c "import re,base64; s=open('.github/workflows/build.yml').read(); b=re.search(r\"echo '([A-Za-z0-9+/=]+)' \| base64\", s).group(1); open('base.tar.xz','wb').write(base64.b64decode(b))"
+          mkdir app && tar -xJf base.tar.xz -C app
+          patch app/www/index.html src2/index.diff
+          cp src2/features.js ringtone.js app/www/
+          cp app-config.js app/www/config.js
+          pip install pillow
+          (cd app && python3 ../make_logo_icons.py)
+          mkdir -p app/libs app/www/vendor
+          cd app/libs
+          npm init -y >/dev/null
+          npm install firebase@10.12.2 jssip@3.10.1 esbuild@0.24.0
+          for f in app auth firestore; do cp node_modules/firebase/firebase-$f-compat.js ../www/vendor/; done
+          echo "window.JsSIP=require('jssip');" > entry.js
+          npx esbuild entry.js --bundle --minify --format=iife --outfile=../www/vendor/jssip.min.js
+          cd "$GITHUB_WORKSPACE"
+          cp app/assets/icon-only.png desktop/icon.png
+          cp -r app/www desktop/www
+          find desktop -type f | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-src
+          path: desktop
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-src
+          path: desktop
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build installer
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install
+          npm pkg set version=2.0.${{ github.run_number }}
+          npx electron-builder --publish never
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
+      - name: Publish as release download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-v2.0.${{ github.run_number }}
+          name: Redpencil Phone for Mac & Windows 2.0.${{ github.run_number }}
+          files: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
