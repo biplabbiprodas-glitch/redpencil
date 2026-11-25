@@ -33,7 +33,31 @@ function nativeRing(name, sub) {
 var _incomingInternal = window.incomingInternal;
 window.incomingInternal = function (id, d) {
   _incomingInternal(id, d);
+  // Tell the caller the call really reached this device, so their screen shows "Ringing…".
+  try { db.collection('calls').doc(id).update({ delivered: TS() }).catch(function () {}); } catch (e) {}
   nativeRing(d.callerName, (d.video ? 'Video call' : 'Voice call') + ' · Ext ' + d.callerExt);
+};
+// Caller side: show "Ringing…" only once the other device confirms it is ringing,
+// instead of guessing from the online dot. Say "may be offline" only after 12 s without a reply.
+var _callInternal = window.callInternal;
+window.callInternal = function (u, video) {
+  var r = _callInternal.apply(this, arguments);
+  var c = S.call;
+  if (!c || c.kind !== 'internal' || c.dir !== 'out') return r;
+  var tries = 0;
+  var iv = setInterval(function () {
+    if (c.ended || ++tries > 300) { clearInterval(iv); return; }
+    if (!c.docReady || !c.ref) return;
+    clearInterval(iv);
+    var say = function (t) { if (!c.ended && c.status === 'ringing' && S.call === c) $('#callStatus').textContent = t; };
+    if (!c.delivered) say('Calling…');
+    var late = setTimeout(function () { if (!c.delivered) say('Calling… (may be offline)'); }, 12000);
+    c.unsubs.push(c.ref.onSnapshot(function (s) {
+      var d = s.data();
+      if (d && d.delivered && !c.delivered) { c.delivered = true; clearTimeout(late); say('Ringing…'); }
+    }));
+  }, 100);
+  return r;
 };
 var _incomingSip = window.incomingSip;
 window.incomingSip = function (s) {
