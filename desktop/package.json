@@ -1,0 +1,62 @@
+{
+  "name": "redpencil-phone-desktop",
+  "version": "2.0.0",
+  "description": "Redpencil Phone for Mac and Windows",
+  "author": "Redpencil Innovation Limited",
+  "main": "main.js",
+  "build": {
+    "appId": "com.redpencil.phone",
+    "productName": "Redpencil Phone",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "www/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.business",
+      "icon": "icon.png",
+      "identity": null,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Redpencil Phone uses the microphone for calls.",
+        "NSCameraUsageDescription": "Redpencil Phone uses the camera for video calls."
+      }
+    },
+    "dmg": {
+      "artifactName": "RedpencilPhone-${version}-Mac.dmg"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "artifactName": "RedpencilPhone-Setup-${version}.exe"
+    },
+    "afterSign": "adhoc-sign.js"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  }
+}
