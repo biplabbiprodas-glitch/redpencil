@@ -1330,3 +1330,56 @@ function attachTileVideos() {
     put(uid, st, false, p.hold);
   });
 }
+
+/* ================= appearance: light, dark or automatic ================= */
+var THEME_KEY = 'rp_theme';
+(function addThemes() {
+  var css = document.createElement('style');
+  css.textContent = [
+    ':root{--bg:#F6F0EC}',
+    'html[data-theme=dark]{color-scheme:dark;--red:#E5384F;--red-d:#C21F37;--ink:#F3EDEB;--ink-2:#CBC1BE;--ink-3:#978C89;--paper:#151112;--card:#1F191A;--line:#352B2C;--green:#3FBF7B;--amber:#F2AB33;--bg:#191415}',
+    'html[data-theme=dark],html[data-theme=dark] body{background:#0B0809}',
+    'html[data-theme=dark] #app{box-shadow:0 0 40px #000}',
+    'html[data-theme=dark] input,html[data-theme=dark] select,html[data-theme=dark] textarea{background:#1A1516;color:var(--ink);border-color:var(--line)}',
+    'html[data-theme=dark] input::placeholder,html[data-theme=dark] textarea::placeholder{color:#7D7270}',
+    'html[data-theme=dark] .chip{background:#2B2223;color:var(--ink-2)}',
+    'html[data-theme=dark] .av{background:#43202A;color:#F7B3BF}',
+    'html[data-theme=dark] .av .dot{border-color:var(--card)}',
+    'html[data-theme=dark] .ib{background:#3B1D24;color:#F06A7D}',
+    'html[data-theme=dark] .ib.g{background:#16301F;color:#4FD08C}',
+    'html[data-theme=dark] .ib.m{background:#172535;color:#7EB2EA}',
+    'html[data-theme=dark] .key:active{background:#3B1D24}',
+    'html[data-theme=dark] .msgs{background:#110D0E}',
+    'html[data-theme=dark] .bub{background:#221B1C;border-color:#352B2C}',
+    'html[data-theme=dark] .bub.me{background:#4B1C26;border-color:#6B2735}',
+    'html[data-theme=dark] .bub .file .fi,html[data-theme=dark] .day{background:#1F191A;border-color:var(--line)}',
+    'html[data-theme=dark] .btn.ghost{border-color:var(--line)}',
+    'html[data-theme=dark] #gmList .gm.me{background:#E5384F26}',
+    '.themeSeg{display:flex;gap:6px;margin-top:12px;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:4px}',
+    '.themeSeg button{flex:1;padding:10px 6px;border-radius:10px;font-weight:600;font-size:13.5px;color:var(--ink-2);display:flex;flex-direction:column;align-items:center;gap:4px}',
+    '.themeSeg button span{font-size:20px;line-height:1}',
+    '.themeSeg button.on{background:var(--red);color:#fff}'
+  ].join('\n');
+  document.head.appendChild(css);
+
+  var card = document.createElement('div'); card.className = 'card'; card.id = 'themeCard';
+  card.innerHTML = '<h3>Appearance</h3><p class="muted">Choose a bright or dark look. Automatic follows your phone or computer setting.</p>' +
+    '<div class="themeSeg"><button data-th="light"><span>☀️</span>Bright</button><button data-th="dark"><span>🌙</span>Dark</button><button data-th="auto"><span>🌓</span>Automatic</button></div>';
+  var first = $('#t-settings .card');
+  if (first) first.parentNode.insertBefore(card, first.nextSibling);
+  card.querySelectorAll('[data-th]').forEach(function (b) {
+    b.onclick = function () { try { localStorage.setItem(THEME_KEY, b.dataset.th); } catch (e) {} applyTheme(); };
+  });
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme); } catch (e) {}
+  applyTheme();
+})();
+function themeChoice() { try { return localStorage.getItem(THEME_KEY) || 'light'; } catch (e) { return 'light'; } }
+function applyTheme() {
+  var c = themeChoice();
+  var dark = c === 'dark' || (c === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  var m = document.querySelector('meta[name=theme-color]');
+  if (!m) { m = document.createElement('meta'); m.name = 'theme-color'; document.head.appendChild(m); }
+  m.content = dark ? '#151112' : '#FBF7F4';
+  document.querySelectorAll('#themeCard [data-th]').forEach(function (b) { b.classList.toggle('on', b.dataset.th === c); });
+}
