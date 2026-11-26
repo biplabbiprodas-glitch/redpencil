@@ -5,3 +5,5 @@ Built automatically by .github/workflows/desktop.yml. Downloads are on the Relea
 v2.0.4: delete messages; Delete and Retake on video messages.
 
 v2.0.6: video meetings, screen sharing, meeting chat and minutes.
+
+v2.0.7: Bright / Dark / Automatic appearance.
